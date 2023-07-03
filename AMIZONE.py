@@ -328,5 +328,5 @@ class AMIZONE:
 
 if __name__ == '__main__':
     bot = AMIZONE()
-    bot.run_telegram_bot("6003832895:AAEueJexjwnoEXkFXNNfG1OY9hNWt3_Oy2c")
+    bot.run_telegram_bot("")
     
