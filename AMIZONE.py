@@ -1,0 +1,332 @@
+from http.client import HTTPException
+import requests
+import bs4
+import json
+import telegram
+from telegram import Update, Bot, replymarkup
+from telegram.ext import Updater, CommandHandler, CallbackContext
+from requests.exceptions import HTTPError
+
+class InvalidCredentialsError(Exception):
+    pass
+
+class ExpiredCredentialsError(Exception):
+    pass
+
+class AMIZONE:
+    def __init__(self, session_cookie=None):
+        self.URL_BASE = "https://s.amizone.net"
+        self.URL_LOGIN = "https://s.amizone.net"
+        self.URL_HOME = "https://s.amizone.net/Home"
+        self.session = requests.Session()
+        self.session.headers.update({"Referer": self.URL_BASE})
+        if session_cookie:
+            try:
+                self.session.cookies.update(json.loads(session_cookie))
+            except:
+                raise ValueError("Invalid or Expired cookie")
+
+    def saveCookie(self):
+        with open('cookie.json', 'w') as f:
+            json.dump(requests.utils.dict_from_cookiejar(self.session.cookies), f)
+
+    def loadCookie(self):
+        with open('cookie.json', 'r') as f:
+            cookiejar = requests.utils.cookiejar_from_dict(json.load(f))
+            self.session.cookies.update(cookiejar)
+
+    def login(self, user, pwd):
+        defaultPage = self.session.get(self.URL_BASE)
+        htmlObject = bs4.BeautifulSoup(defaultPage.content, 'html.parser')
+        rvt = htmlObject.find(id="loginform").input['value']
+        data = {
+            "_UserName": user,
+            "_Password": pwd,
+            "__RequestVerificationToken": rvt
+        }
+        response = self.session.post(self.URL_LOGIN, data=data)
+        response.raise_for_status()
+        if "Invalid credentials" in response.text:
+            raise InvalidCredentialsError("Invalid AMIZONE credentials")
+        elif "Expired credentials" in response.text:
+            raise ExpiredCredentialsError("Expired AMIZONE credentials")
+        return response.cookies
+
+    def my_courses(self, sem=None):
+        try:
+            if sem:
+                a = self.session.post("https://s.amizone.net/Academics/MyCourses/CourseListSemWise", data={'sem': sem})
+            else:
+                a = self.session.get("https://s.amizone.net/Academics/MyCourses")
+            b = bs4.BeautifulSoup(a.content, 'html.parser')
+            courseCode = [c.text.strip() for c in b.find_all(attrs={'data-title': "Course Code"})]
+            courseName = [c.text.strip() for c in b.find_all(attrs={'data-title': "Course Name"})]
+            attendance = [c.text.strip() for c in b.find_all(attrs={'data-title': "Attendance"})]
+            syllabus = [c.decode_contents() for c in b.find_all(attrs={'data-title': "Course Syllabus"})]
+            # Extract href from anchor tags
+            syllabus = [i[i.find('"') + 1:i.find('"', i.find('"') + 1)] for i in syllabus]
+            percentage = []
+            for i in attendance:
+                try:
+                    x = float(i[i.find("(") + 1:i.find(")")])
+                    percentage.append(x)
+                except:
+                    percentage.append(100.0)
+        except:
+            raise ValueError("Invalid or Expired cookie")
+        else:
+            return {
+                'course_code': courseCode,
+                'course_name': courseName,
+                'attendance': attendance,
+                'attendance_pct': percentage,
+                'syllabus': syllabus,
+            }
+
+    def faculty(self):
+        try:
+            a = self.session.get("https://s.amizone.net/FacultyFeeback/FacultyFeedback")
+            b = bs4.BeautifulSoup(a.content, 'html.parser')
+            faculties=[x.text.strip() for x in b.find_all(attrs={"class":"faculty-name"})]
+            subjects=[x.text.strip() for x in b.find_all(attrs={"class":"subject"})]
+            images=[x["src"] for x in b.find_all(attrs={"class":"img-responsive"})]
+        except:
+            raise HTTPException(status_code=401, detail="Invalid or Expired cookie")
+        else:
+            return {
+                'faculties':faculties,
+                'subjects':subjects,
+                'images':images
+            }
+
+    def exam_schedule(self):
+        try:
+            a = self.session.get('https://s.amizone.net/Examination/ExamSchedule')
+            b = bs4.BeautifulSoup(a.content, 'html.parser')
+            courseCode = [c.text.strip() for c in b.find_all(attrs={'data-title': "Course Code"})]
+            courseTitle = [c.text.strip() for c in b.find_all(attrs={'data-title': "Course Title"})]
+            ExamDate = [c.text.strip() for c in b.find_all(attrs={'data-title': "Exam Date"})]
+            Time = [c.text.strip() for c in b.find_all(attrs={'data-title': "Time"})]
+        except:
+            raise HTTPException(status_code=401, detail="Invalid or Expired cookie")
+        else:
+            return {
+                'course_code':courseCode,
+                'course_title':courseTitle,
+                'exam_date':ExamDate,
+                'exam_time':Time
+            }
+
+
+    def my_profile(self):
+        try:
+            a = self.session.get("https://s.amizone.net/Electives/NewCourseCoding")
+            b = bs4.BeautifulSoup(a.content, 'html.parser')
+            row1=[x.text for x in b.find_all("div",attrs={"class":"col-md-3"})]
+            row2 = [x.text for x in b.find_all("div", attrs={"class": "col-md-2"})]
+            name=row1[0].split(': ')[1].strip()
+            Enrollment=row1[1].split(': ')[1].strip()
+            programme=row2[0].split(': ')[1].strip()
+            sem=row2[1].split(': ')[1].strip()
+            passyear=row2[2].split(': ')[1].strip()
+        except:
+            raise HTTPException(status_code=401, detail="Invalid or Expired cookie")
+        else:
+            return {
+                'name':name,
+                'enrollment':Enrollment,
+                'programme':programme,
+                'sem':sem,
+                'passyear':passyear
+            }
+        
+
+    def results(self, sem=None):
+        try:
+            if sem:
+                a = self.session.post("https://s.amizone.net/Examination/Examination/ExaminationListSemWise", data= {'sem':sem})
+            else:
+                a = self.session.get("https://s.amizone.net/Examination/Examination")
+            b = bs4.BeautifulSoup(a.content, 'html.parser')
+            courseCode = [c.text.strip() for c in b.find_all(attrs={'data-title': "Course Code"})]
+            courseTitle = [c.text.strip() for c in b.find_all(attrs={'data-title': "Course Title"})]
+            GradeObtained = [c.text.strip() for c in b.find_all(attrs={'data-title': "Go"})]
+            GradePoint=[c.text.strip() for c in b.find_all(attrs={'data-title': "GP"})]
+            sgpa=[float(x.text.strip()) for x in b.find_all(attrs={'data-title': "SGPA"})]
+            cgpa=[x.text.strip() for x in b.find_all(attrs={'data-title': "CGPA"})]
+            if len(sgpa):
+                cgpa[0] = sgpa[0]
+                cgpa=[float(x) for x in cgpa]
+        except:
+            raise HTTPError("Invalid or Expired cookie")
+        else:
+            return {
+                "sem_result":{
+                    "course_code":courseCode,
+                    "course_title":courseTitle,
+                    "grade_obtained":GradeObtained,
+                    "grade_point":GradePoint,
+                },
+                "combined":{
+                    "sgpa":sgpa,
+                    "cgpa":cgpa
+                }
+            }
+
+    def start_telegram_bot(self):
+        bot = Bot(token=self.TELEGRAM_TOKEN)
+        updater = Updater(bot=bot, use_context=True)
+        dispatcher = updater.dispatcher
+
+        def start(update: Update, context: CallbackContext):
+            context.bot.send_message(chat_id=update.effective_chat.id, text="Welcome to AMIZONE Bot! Send /login to enter your AMIZONE credentials.")
+
+        def login_command(update: Update, context: CallbackContext):
+            context.bot.send_message(chat_id=update.effective_chat.id, text="Please enter your AMIZONE username: /username")
+
+        def username(update: Update, context: CallbackContext):
+            context.bot.send_message(chat_id=update.effective_chat.id, text="Please enter your AMIZONE password: /password")
+            # Save the entered username in the user's context
+            context.user_data['username'] = context.args[0]
+
+        def password(update: Update, context: CallbackContext):
+            # Retrieve the previously entered username from the user's context
+            username = context.user_data.get('username')
+
+            if not username:
+                context.bot.send_message(chat_id=update.effective_chat.id, text="Please enter your AMIZONE username first: /username")
+                return
+
+            password = context.args[0]
+
+            self.login(username, password)
+            self.saveCookie()
+            context.bot.send_message(chat_id=update.effective_chat.id, text="Login successful.\n please select commands from menu")
+                # Fetch attendance information after successful login
+                
+    
+                
+
+        def attendance(update: Update, context: CallbackContext):
+            try:
+                self.loadCookie()
+                attendance_data = self.my_courses()
+                attendance_message = ""
+                for i in range(len(attendance_data['course_code'])):
+                    attendance_message += f"Course Code: {attendance_data['course_code'][i]}\n"
+                    attendance_message += f"Course Name: {attendance_data['course_name'][i]}\n"
+                    attendance_message += f"Attendance: {attendance_data['attendance'][i]}\n"
+                    attendance_message += f"Attendance Percentage: {attendance_data['attendance_pct'][i]}%\n"
+                    attendance_message += f"Syllabus: {attendance_data['syllabus'][i]}\n\n"
+                context.bot.send_message(chat_id=update.effective_chat.id, text=attendance_message)
+            except:
+
+
+                context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred while fetching attendance information.")
+        def my_profile_command(update: Update, context: CallbackContext):
+            try:
+                self.loadCookie()
+                profile_data = self.my_profile()
+                profile_message = ""
+                profile_message += f"Name: {profile_data['name']}\n"
+                profile_message += f"Enrollment: {profile_data['enrollment']}\n"
+                profile_message += f"Programme: {profile_data['programme']}\n"
+                profile_message += f"Semester: {profile_data['sem']}\n"
+                profile_message += f"Passing Year: {profile_data['passyear']}\n"
+                context.bot.send_message(chat_id=update.effective_chat.id, text=profile_message)
+            except:
+                context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred while fetching profile information.")     
+
+        def exam_schedule_command(update: Update, context: CallbackContext):
+                    try:
+                        self.loadCookie()
+                        exam_schedule_data = self.exam_schedule()
+                        exam_schedule_message = ""
+                        for i in range(len(exam_schedule_data['course_code'])):
+                            exam_schedule_message += f"Course Code: {exam_schedule_data['course_code'][i]}\n"
+                            exam_schedule_message += f"Course Title: {exam_schedule_data['course_title'][i]}\n"
+                            exam_schedule_message += f"Exam Date: {exam_schedule_data['exam_date'][i]}\n"
+                            exam_schedule_message += f"Exam Time: {exam_schedule_data['exam_time'][i]}\n\n"
+                        context.bot.send_message(chat_id=update.effective_chat.id, text=exam_schedule_message)
+                    except:
+                        context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred while fetching exam schedule information.")  
+
+        def my_courses_command(update: Update, context: CallbackContext):
+            try:
+                self.loadCookie()
+                my_courses_data = self.my_courses()
+                my_courses_message = ""
+                for i in range(len(my_courses_data['course_code'])):
+                    my_courses_message += f"Course Code: {my_courses_data['course_code'][i]}\n"
+                    my_courses_message += f"Course Name: {my_courses_data['course_name'][i]}\n"
+                context.bot.send_message(chat_id=update.effective_chat.id, text=my_courses_message)
+            except:
+                context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred while fetching my courses information.")
+
+
+        def faculty(update: Update, context: CallbackContext):
+            try:
+                self.loadCookie()
+                faculty_data = self.faculty()
+                faculty_message = ""
+                for i, faculty in enumerate(faculty_data['faculties']):
+                    faculty_message += f"Name: {faculty}\n"
+                    faculty_message += f"Subject: {faculty_data['subjects'][i]}\n"
+                    faculty_message += f"Image: {faculty_data['images'][i]}\n\n"
+                context.bot.send_message(chat_id=update.effective_chat.id, text=faculty_message)
+            except:
+                context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred while fetching faculty information.")
+
+              
+        def results(update: Update, context: CallbackContext):
+            try:
+                self.loadCookie()
+                results_data = self.results()
+                results_message = ""
+                sem_result = results_data['sem_result']
+                combined = results_data['combined']
+                for i in range(len(sem_result['course_code'])):
+                    results_message += f"Course Code: {sem_result['course_code'][i]}\n"
+                    results_message += f"Course Title: {sem_result['course_title'][i]}\n"
+                    results_message += f"Grade Obtained: {sem_result['grade_obtained'][i]}\n"
+                    results_message += f"Grade Point: {sem_result['grade_point'][i]}\n\n"
+                results_message += f"SGPA: {combined['sgpa'][0]}\n"
+                results_message += f"CGPA: {combined['cgpa'][0]}\n"
+                context.bot.send_message(chat_id=update.effective_chat.id, text=results_message)
+            except:
+                context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred while fetching results information.")
+
+        # Define command handlers
+        start_handler = CommandHandler('start', start)
+        login_command_handler = CommandHandler('login', login_command)
+        username_handler = CommandHandler('username', username)
+        password_handler = CommandHandler('password', password)
+        attendance_handler = CommandHandler('attendance', attendance)
+        my_profile_handler = CommandHandler('my_profile', my_profile_command)
+        my_courses_handler = CommandHandler('my_course', my_courses_command)
+        results_handler = CommandHandler('results', results)
+        faculty_handler = CommandHandler('faculty', faculty)
+        exam_schedule_handler = CommandHandler('exam_schedule', exam_schedule_command)
+
+        # Add command handlers to the dispatcher
+        dispatcher.add_handler(start_handler)
+        dispatcher.add_handler(login_command_handler)
+        dispatcher.add_handler(username_handler)
+        dispatcher.add_handler(password_handler)
+        dispatcher.add_handler(attendance_handler)
+        dispatcher.add_handler(faculty_handler)
+        dispatcher.add_handler(my_profile_handler)
+        dispatcher.add_handler(results_handler)
+        dispatcher.add_handler(my_courses_handler)
+        dispatcher.add_handler(exam_schedule_handler)
+
+        updater.start_polling()
+
+    def run_telegram_bot(self, telegram_token):
+        self.TELEGRAM_TOKEN = telegram_token
+        self.start_telegram_bot()
+
+if __name__ == '__main__':
+    bot = AMIZONE()
+    bot.run_telegram_bot("6003832895:AAEueJexjwnoEXkFXNNfG1OY9hNWt3_Oy2c")
+    
