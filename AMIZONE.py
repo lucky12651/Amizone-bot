@@ -6,6 +6,11 @@ import telegram
 from telegram import Update, Bot, replymarkup
 from telegram.ext import Updater, CommandHandler, CallbackContext
 from requests.exceptions import HTTPError
+from datetime import datetime
+import re
+import firebase_admin
+from firebase_admin import credentials, db
+
 
 class InvalidCredentialsError(Exception):
     pass
@@ -26,14 +31,18 @@ class AMIZONE:
             except:
                 raise ValueError("Invalid or Expired cookie")
 
+
+        # Initialize Firebase Admin SDK
+        cred = credentials.Certificate('/Users/vaibhav/Desktop/new/assistant-b35bd-firebase-adminsdk-7ntnq-7c96808bc5.json')
+        firebase_admin.initialize_app(cred, {
+            'databaseURL': 'https://assistant-b35bd-default-rtdb.firebaseio.com/'
+        })
+
     def saveCookie(self):
-        with open('cookie.json', 'w') as f:
-            json.dump(requests.utils.dict_from_cookiejar(self.session.cookies), f)
+        pass
 
     def loadCookie(self):
-        with open('cookie.json', 'r') as f:
-            cookiejar = requests.utils.cookiejar_from_dict(json.load(f))
-            self.session.cookies.update(cookiejar)
+        pass
 
     def login(self, user, pwd):
         defaultPage = self.session.get(self.URL_BASE)
@@ -98,6 +107,42 @@ class AMIZONE:
                 'subjects':subjects,
                 'images':images
             }
+        
+
+    def timetable(self, date=datetime.now().strftime("%Y-%m-%d")):
+        timestamp = round(datetime.now().timestamp()*1000)
+        start = datetime.strptime(date, "%Y-%m-%d")
+        end = start
+        try:
+            res = self.session.get("https://s.amizone.net/Calendar/home/GetDiaryEvents?start={0}&end={1}&_={2}".format(date, end, timestamp))
+            res_json = json.loads(res.content)
+            courseCode = [i['CourseCode'].strip() for i in res_json]
+            courseTitle = [i['title'].strip() for i in res_json]
+            courseTeacher = [re.sub('&lt;/?[a-z]+&gt;', '', i['FacultyName'].split('[')[0]).strip() for i in res_json]
+            classLocation = [i['RoomNo'].strip() for i in res_json]
+            Time = [datetime.strptime(i['start'],'%Y/%m/%d %I:%M:%S %p').strftime('%H:%M') + ' - ' + datetime.strptime(i['end'],'%Y/%m/%d %I:%M:%S %p').strftime('%H:%M') for i in res_json]
+            Attendance = []
+            for i in res_json:
+                if i['AttndColor'] == '#4FCC4F':
+                    Attendance.append("✅")
+                elif i['AttndColor'] == '#f00':
+                    Attendance.append("❌")
+                elif i['AttndColor'] == '#3a87ad':
+                    Attendance.append(0)
+        except:
+            raise HTTPException(status_code=401, detail="Invalid or Expired cookie")
+        else:
+            timeTableData = {'course_code':courseCode,'course_title':courseTitle,'course_teacher':courseTeacher,'class_location':classLocation,'class_time':Time,'attendance':Attendance}
+            sortedTimeTableData = {
+                'course_code':[timeTableData['course_code'][timeTableData['class_time'].index(i)] for i in sorted(timeTableData['class_time'])],
+                'course_title':[timeTableData['course_title'][timeTableData['class_time'].index(i)] for i in sorted(timeTableData['class_time'])],
+                'course_teacher':[timeTableData['course_teacher'][timeTableData['class_time'].index(i)] for i in sorted(timeTableData['class_time'])],
+                'class_location':[timeTableData['class_location'][timeTableData['class_time'].index(i)] for i in sorted(timeTableData['class_time'])],
+                'class_time':sorted(timeTableData['class_time']),
+                'attendance':[timeTableData['attendance'][timeTableData['class_time'].index(i)] for i in sorted(timeTableData['class_time'])]
+            }
+            return sortedTimeTableData
+
 
     def exam_schedule(self):
         try:
@@ -182,10 +227,10 @@ class AMIZONE:
             context.bot.send_message(chat_id=update.effective_chat.id, text="Welcome to AMIZONE Bot! Send /login to enter your AMIZONE credentials.")
 
         def login_command(update: Update, context: CallbackContext):
-            context.bot.send_message(chat_id=update.effective_chat.id, text="Please enter your AMIZONE username: /username")
+            context.bot.send_message(chat_id=update.effective_chat.id, text="Please enter your AMIZONE username:For Example-  /username 8098099")
 
         def username(update: Update, context: CallbackContext):
-            context.bot.send_message(chat_id=update.effective_chat.id, text="Please enter your AMIZONE password: /password")
+            context.bot.send_message(chat_id=update.effective_chat.id, text="Please enter your AMIZONE password:For Example-  /password hello@123")
             # Save the entered username in the user's context
             context.user_data['username'] = context.args[0]
 
@@ -200,101 +245,186 @@ class AMIZONE:
             password = context.args[0]
 
             self.login(username, password)
-            self.saveCookie()
+            
             context.bot.send_message(chat_id=update.effective_chat.id, text="Login successful.\n please select commands from menu")
-                # Fetch attendance information after successful login
                 
+                
+                # Store user credentials in Firebase database
+            user_data = {
+                    'username': username,
+                    'password': password
+                }
+            user_ref = db.reference('users').child(str(update.effective_chat.id))
+            user_ref.set(user_data)
     
                 
-
+            # Fetch attendance information after successful login
         def attendance(update: Update, context: CallbackContext):
             try:
-                self.loadCookie()
-                attendance_data = self.my_courses()
-                attendance_message = ""
-                for i in range(len(attendance_data['course_code'])):
-                    attendance_message += f"Course Code: {attendance_data['course_code'][i]}\n"
-                    attendance_message += f"Course Name: {attendance_data['course_name'][i]}\n"
-                    attendance_message += f"Attendance: {attendance_data['attendance'][i]}\n"
-                    attendance_message += f"Attendance Percentage: {attendance_data['attendance_pct'][i]}%\n"
-                    attendance_message += f"Syllabus: {attendance_data['syllabus'][i]}\n\n"
-                context.bot.send_message(chat_id=update.effective_chat.id, text=attendance_message)
+                chat_id = update.effective_chat.id
+                if check_user_exist(chat_id):
+                    username, password = fetch_user_credentials(chat_id)
+                    if username and password:
+                        self.login(username, password)
+                        self.loadCookie()
+                        attendance_data = self.my_courses()
+                        attendance_message = ""
+                        for i in range(len(attendance_data['course_code'])):
+                            attendance_message += f"Course Code: {attendance_data['course_code'][i]}\n"
+                            attendance_message += f"Course Name: {attendance_data['course_name'][i]}\n"
+                            attendance_message += f"Attendance: {attendance_data['attendance'][i]}\n"
+                            attendance_message += f"Attendance Percentage: {attendance_data['attendance_pct'][i]}%\n"
+                            attendance_message += f"Syllabus: {attendance_data['syllabus'][i]}\n\n"
+                        context.bot.send_message(chat_id=chat_id, text=attendance_message)
+                    else:
+                        context.bot.send_message(chat_id=chat_id, text="User credentials not found. Please log in again.")
+                else:
+                    context.bot.send_message(chat_id=chat_id, text="User not found. Please log in using /login command.")
             except:
-
-
-                context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred while fetching attendance information.")
+                context.bot.send_message(chat_id=chat_id, text="An error occurred while fetching attendance information.")
         def my_profile_command(update: Update, context: CallbackContext):
             try:
-                self.loadCookie()
-                profile_data = self.my_profile()
-                profile_message = ""
-                profile_message += f"Name: {profile_data['name']}\n"
-                profile_message += f"Enrollment: {profile_data['enrollment']}\n"
-                profile_message += f"Programme: {profile_data['programme']}\n"
-                profile_message += f"Semester: {profile_data['sem']}\n"
-                profile_message += f"Passing Year: {profile_data['passyear']}\n"
-                context.bot.send_message(chat_id=update.effective_chat.id, text=profile_message)
+                chat_id = update.effective_chat.id
+                if check_user_exist(chat_id):
+                    username, password = fetch_user_credentials(chat_id)
+                    if username and password:
+                        self.login(username, password)
+                        self.loadCookie()
+                        profile_data = self.my_profile()
+                        profile_message = ""
+                        profile_message += f"Name: {profile_data['name']}\n"
+                        profile_message += f"Enrollment: {profile_data['enrollment']}\n"
+                        profile_message += f"Programme: {profile_data['programme']}\n"
+                        profile_message += f"Semester: {profile_data['sem']}\n"
+                        profile_message += f"Passing Year: {profile_data['passyear']}\n"
+                        context.bot.send_message(chat_id=update.effective_chat.id, text=profile_message)
+                    else:
+                        context.bot.send_message(chat_id=chat_id, text="User credentials not found. Please log in again.")
+                else:
+                    context.bot.send_message(chat_id=chat_id, text="User not found. Please log in using /login command.")
+    
             except:
                 context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred while fetching profile information.")     
 
         def exam_schedule_command(update: Update, context: CallbackContext):
                     try:
-                        self.loadCookie()
-                        exam_schedule_data = self.exam_schedule()
-                        exam_schedule_message = ""
-                        for i in range(len(exam_schedule_data['course_code'])):
-                            exam_schedule_message += f"Course Code: {exam_schedule_data['course_code'][i]}\n"
-                            exam_schedule_message += f"Course Title: {exam_schedule_data['course_title'][i]}\n"
-                            exam_schedule_message += f"Exam Date: {exam_schedule_data['exam_date'][i]}\n"
-                            exam_schedule_message += f"Exam Time: {exam_schedule_data['exam_time'][i]}\n\n"
-                        context.bot.send_message(chat_id=update.effective_chat.id, text=exam_schedule_message)
+                        chat_id = update.effective_chat.id
+                        if check_user_exist(chat_id):
+                            username, password = fetch_user_credentials(chat_id)
+                            if username and password:
+                               self.login(username, password)
+                               self.loadCookie()
+                               exam_schedule_data = self.exam_schedule()
+                               exam_schedule_message = ""
+                               for i in range(len(exam_schedule_data['course_code'])):
+                                   exam_schedule_message += f"Course Code: {exam_schedule_data['course_code'][i]}\n"
+                                   exam_schedule_message += f"Course Title: {exam_schedule_data['course_title'][i]}\n"
+                                   exam_schedule_message += f"Exam Date: {exam_schedule_data['exam_date'][i]}\n"
+                                   exam_schedule_message += f"Exam Time: {exam_schedule_data['exam_time'][i]}\n\n"
+                               context.bot.send_message(chat_id=update.effective_chat.id, text=exam_schedule_message)
+                            else:
+                              context.bot.send_message(chat_id=chat_id, text="User credentials not found. Please log in again.")
+                        else:
+                           context.bot.send_message(chat_id=chat_id, text="User not found. Please log in using /login command.")
                     except:
-                        context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred while fetching exam schedule information.")  
+                      context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred while fetching exam information.")     
 
         def my_courses_command(update: Update, context: CallbackContext):
             try:
-                self.loadCookie()
-                my_courses_data = self.my_courses()
-                my_courses_message = ""
-                for i in range(len(my_courses_data['course_code'])):
-                    my_courses_message += f"Course Code: {my_courses_data['course_code'][i]}\n"
-                    my_courses_message += f"Course Name: {my_courses_data['course_name'][i]}\n"
-                context.bot.send_message(chat_id=update.effective_chat.id, text=my_courses_message)
+                chat_id = update.effective_chat.id
+                if check_user_exist(chat_id):
+                    username, password = fetch_user_credentials(chat_id)
+                    if username and password:
+                        self.login(username, password)
+                        self.loadCookie()
+                        my_courses_data = self.my_courses()
+                        my_courses_message = ""
+                        for i in range(len(my_courses_data['course_code'])):
+                            my_courses_message += f"Course Code: {my_courses_data['course_code'][i]}\n"
+                            my_courses_message += f"Course Name: {my_courses_data['course_name'][i]}\n"
+                        context.bot.send_message(chat_id=update.effective_chat.id, text=my_courses_message)
+                    else:
+                        context.bot.send_message(chat_id=chat_id, text="User credentials not found. Please log in again.")
+                else:
+                    context.bot.send_message(chat_id=chat_id, text="User not found. Please log in using /login command.")
             except:
-                context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred while fetching my courses information.")
+                context.bot.send_message(chat_id=chat_id, text="An error occurred while fetching my course information.")
+
+        def timetable_command(update: Update, context: CallbackContext):
+            try:
+                chat_id = update.effective_chat.id
+                if check_user_exist(chat_id):
+                    username, password = fetch_user_credentials(chat_id)
+                    if username and password:
+                        self.login(username, password)
+                        self.loadCookie()
+                        timetable_data = self.timetable()
+                        timetable_message = ""
+                        for i in range(len(timetable_data['course_code'])):
+                            timetable_message += f"Course Code: {timetable_data['course_code'][i]}\n"
+                            timetable_message += f"Course Title: {timetable_data['course_title'][i]}\n"
+                            timetable_message += f"Course Teacher: {timetable_data['course_teacher'][i]}\n"
+                            timetable_message += f"Class Location: {timetable_data['class_location'][i]}\n"
+                            timetable_message += f"Class Time: {timetable_data['class_time'][i]}\n"
+                            timetable_message += f"Attendance: {timetable_data['attendance'][i]}\n\n"
+                        context.bot.send_message(chat_id=update.effective_chat.id, text=timetable_message)
+                    else:
+                        context.bot.send_message(chat_id=chat_id, text="User credentials not found. Please log in again.")
+                else:
+                    context.bot.send_message(chat_id=chat_id, text="User not found. Please log in using /login command.")
+            except:
+                context.bot.send_message(chat_id=chat_id, text="Your Time-Table is not set yet")
 
 
         def faculty(update: Update, context: CallbackContext):
             try:
-                self.loadCookie()
-                faculty_data = self.faculty()
-                faculty_message = ""
-                for i, faculty in enumerate(faculty_data['faculties']):
-                    faculty_message += f"Name: {faculty}\n"
-                    faculty_message += f"Subject: {faculty_data['subjects'][i]}\n"
-                    faculty_message += f"Image: {faculty_data['images'][i]}\n\n"
-                context.bot.send_message(chat_id=update.effective_chat.id, text=faculty_message)
+                chat_id = update.effective_chat.id
+                if check_user_exist(chat_id):
+                    username, password = fetch_user_credentials(chat_id)
+                    if username and password:
+                        self.login(username, password)
+                        self.loadCookie()
+                        faculty_data = self.faculty()
+                        faculty_message = ""
+                        for i, faculty in enumerate(faculty_data['faculties']):
+                           faculty_message += f"Name: {faculty}\n"
+                           faculty_message += f"Subject: {faculty_data['subjects'][i]}\n"
+                           faculty_message += f"Image: {faculty_data['images'][i]}\n\n"
+                        context.bot.send_message(chat_id=update.effective_chat.id, text=faculty_message)
+                    else:
+                        context.bot.send_message(chat_id=chat_id, text="User credentials not found. Please log in again.")
+                else:
+                    context.bot.send_message(chat_id=chat_id, text="User not found. Please log in using /login command.")
             except:
-                context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred while fetching faculty information.")
+                context.bot.send_message(chat_id=chat_id, text="An error occurred while fetching faculty information.")
 
               
         def results(update: Update, context: CallbackContext):
             try:
-                self.loadCookie()
-                results_data = self.results()
-                results_message = ""
-                sem_result = results_data['sem_result']
-                combined = results_data['combined']
-                for i in range(len(sem_result['course_code'])):
-                    results_message += f"Course Code: {sem_result['course_code'][i]}\n"
-                    results_message += f"Course Title: {sem_result['course_title'][i]}\n"
-                    results_message += f"Grade Obtained: {sem_result['grade_obtained'][i]}\n"
-                    results_message += f"Grade Point: {sem_result['grade_point'][i]}\n\n"
-                results_message += f"SGPA: {combined['sgpa'][0]}\n"
-                results_message += f"CGPA: {combined['cgpa'][0]}\n"
-                context.bot.send_message(chat_id=update.effective_chat.id, text=results_message)
+                chat_id = update.effective_chat.id
+                if check_user_exist(chat_id):
+                    username, password = fetch_user_credentials(chat_id)
+                    if username and password:
+                        self.login(username, password)
+                        self.loadCookie()
+                        results_data = self.results()
+                        results_message = ""
+                        sem_result = results_data['sem_result']
+                        combined = results_data['combined']
+                        for i in range(len(sem_result['course_code'])):
+                            results_message += f"Course Code: {sem_result['course_code'][i]}\n"
+                            results_message += f"Course Title: {sem_result['course_title'][i]}\n"
+                            results_message += f"Grade Obtained: {sem_result['grade_obtained'][i]}\n"
+                            results_message += f"Grade Point: {sem_result['grade_point'][i]}\n\n"
+                            results_message += f"SGPA: {combined['sgpa'][0]}\n"
+                            results_message += f"CGPA: {combined['cgpa'][0]}\n"
+                        context.bot.send_message(chat_id=chat_id, text=results_message)
+                    else:
+                        context.bot.send_message(chat_id=chat_id, text="User credentials not found. Please log in again.")
+                else:
+                    context.bot.send_message(chat_id=chat_id, text="User not found. Please log in using /login command.")
             except:
-                context.bot.send_message(chat_id=update.effective_chat.id, text="An error occurred while fetching results information.")
+                context.bot.send_message(chat_id=chat_id, text="An error occurred while fetching results information.")
 
         # Define command handlers
         start_handler = CommandHandler('start', start)
@@ -302,6 +432,7 @@ class AMIZONE:
         username_handler = CommandHandler('username', username)
         password_handler = CommandHandler('password', password)
         attendance_handler = CommandHandler('attendance', attendance)
+        timetable_handler = CommandHandler('timetable', timetable_command)
         my_profile_handler = CommandHandler('my_profile', my_profile_command)
         my_courses_handler = CommandHandler('my_course', my_courses_command)
         results_handler = CommandHandler('results', results)
@@ -319,12 +450,28 @@ class AMIZONE:
         dispatcher.add_handler(results_handler)
         dispatcher.add_handler(my_courses_handler)
         dispatcher.add_handler(exam_schedule_handler)
+        dispatcher.add_handler(timetable_handler)
 
         updater.start_polling()
 
     def run_telegram_bot(self, telegram_token):
         self.TELEGRAM_TOKEN = telegram_token
         self.start_telegram_bot()
+
+def check_user_exist(chat_id):
+    ref = db.reference('users')
+    user_ref = ref.child(str(chat_id))
+    return user_ref.get() is not None
+
+def fetch_user_credentials(chat_id):
+    ref = db.reference('users')
+    user_ref = ref.child(str(chat_id))
+    user_data = user_ref.get()
+    if user_data:
+        username = user_data.get('username')
+        password = user_data.get('password')
+        return username, password
+    return None, None
 
 if __name__ == '__main__':
     bot = AMIZONE()
