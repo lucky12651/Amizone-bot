@@ -7,6 +7,7 @@ This is a Python script for interacting with the AMIZONE website using the `requ
 - `requests` library
 - `bs4` (Beautiful Soup) library
 - `telegram` library
+- `firebase`
 
 ## Installation
 1. Clone the repository or download the script file.
@@ -14,6 +15,30 @@ This is a Python script for interacting with the AMIZONE website using the `requ
    ```shell
    pip install requests bs4 telegram
    ```
+
+## Firebase Integration
+
+The Telegram bot requires Firebase integration to store and retrieve user credentials. Follow the steps below to set up Firebase integration:
+
+1. Create a Firebase project: Go to the [Firebase Console](https://console.firebase.google.com/) and create a new project.
+
+2. Generate Firebase Admin SDK credentials: In the Firebase Console, go to "Project settings" and navigate to the "Service Accounts" tab. Click on "Generate new private key" to download the JSON key file.
+
+3. Save the JSON key file: Save the downloaded JSON key file securely on your system.
+
+4. Update the AMIZONE class: In the `__init__` method of the `AMIZONE` class, update the path to the JSON key file in the `credentials.Certificate()` call.
+
+```python
+cred = credentials.Certificate('/path/to/your/firebase-adminsdk-key.json')
+```
+
+5. Initialize the Firebase Admin SDK: In the `__init__` method of the `AMIZONE` class, update the `databaseURL` parameter in the `firebase_admin.initialize_app()` call with your Firebase project's database URL.
+
+```python
+firebase_admin.initialize_app(cred, {
+    'databaseURL': 'https://your-project-id.firebaseio.com/'
+})
+```
 
 ## Usage
 1. Import the necessary classes and exceptions:
