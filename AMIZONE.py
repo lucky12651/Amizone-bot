@@ -44,6 +44,30 @@ class AMIZONE:
     def loadCookie(self):
         pass
 
+
+
+    def validate_credentials(self, username, password):
+        default_page = self.session.get(self.URL_BASE)
+        html_object = bs4.BeautifulSoup(default_page.content, 'html.parser')
+        rvt = html_object.find(id="loginform").input['value']
+        data = {
+            "_UserName": username,
+            "_Password": password,
+            "__RequestVerificationToken": rvt
+        }
+        response = self.session.post(self.URL_LOGIN, data=data)
+        response.raise_for_status()
+
+        if "Please check your credential !!" in response.text:
+            return False
+        elif "Expired credentials" in response.text:
+            return False
+
+        # If the response doesn't contain "Invalid credentials" or "Expired credentials",
+        # assume the credentials are valid
+        return True
+
+
     def login(self, user, pwd):
         defaultPage = self.session.get(self.URL_BASE)
         htmlObject = bs4.BeautifulSoup(defaultPage.content, 'html.parser')
@@ -55,11 +79,6 @@ class AMIZONE:
         }
         response = self.session.post(self.URL_LOGIN, data=data)
         response.raise_for_status()
-        if "Invalid credentials" in response.text:
-            raise InvalidCredentialsError("Invalid AMIZONE credentials")
-        elif "Expired credentials" in response.text:
-            raise ExpiredCredentialsError("Expired AMIZONE credentials")
-        return response.cookies
 
     def my_courses(self, sem=None):
         try:
@@ -239,23 +258,29 @@ class AMIZONE:
             username = context.user_data.get('username')
 
             if not username:
-                context.bot.send_message(chat_id=update.effective_chat.id, text="Please enter your AMIZONE username first: /username")
-                return
+               context.bot.send_message(chat_id=update.effective_chat.id, text="Please enter your AMIZONE username first: /username")
+               return
 
             password = context.args[0]
 
+            # Check if the credentials are valid
+            if not self.validate_credentials(username, password):
+                context.bot.send_message(chat_id=update.effective_chat.id, text="Invalid username or password. Please try again.")
+                return
+
+            # If the credentials are valid, perform the login
             self.login(username, password)
-            
-            context.bot.send_message(chat_id=update.effective_chat.id, text="Login successful.\n please select commands from menu")
-                
-                
-                # Store user credentials in Firebase database
+
+            context.bot.send_message(chat_id=update.effective_chat.id, text="Login successful.\nPlease select commands from the menu.")
+
+             # Store user credentials in Firebase database
             user_data = {
-                    'username': username,
-                    'password': password
-                }
+                'username': username,
+                'password': password
+            }
             user_ref = db.reference('users').child(str(update.effective_chat.id))
             user_ref.set(user_data)
+
     
                 
             # Fetch attendance information after successful login
