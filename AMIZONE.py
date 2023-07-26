@@ -33,7 +33,7 @@ class AMIZONE:
 
 
         # Initialize Firebase Admin SDK
-        cred = credentials.Certificate('/Users/vaibhav/Desktop/new/assistant-b35bd-firebase-adminsdk-7ntnq-7c96808bc5.json')
+        cred = credentials.Certificate('assistant-b35bd-firebase-adminsdk-7ntnq-7c96808bc5.json')
         firebase_admin.initialize_app(cred, {
             'databaseURL': 'https://assistant-b35bd-default-rtdb.firebaseio.com/'
         })
@@ -128,7 +128,13 @@ class AMIZONE:
             }
         
 
-    def timetable(self, date=datetime.now().strftime("%Y-%m-%d")):
+    def timetable(self, date=None):
+
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+        else:
+            date = datetime.strptime(date, "%Y-%m-%d").strftime("%Y-%m-%d")    
+            
         timestamp = round(datetime.now().timestamp()*1000)
         start = datetime.strptime(date, "%Y-%m-%d")
         end = start
@@ -143,11 +149,11 @@ class AMIZONE:
             Attendance = []
             for i in res_json:
                 if i['AttndColor'] == '#4FCC4F':
-                    Attendance.append("✅")
+                    Attendance.append("🟢")
                 elif i['AttndColor'] == '#f00':
-                    Attendance.append("❌")
+                    Attendance.append("🔴")
                 elif i['AttndColor'] == '#3a87ad':
-                    Attendance.append(0)
+                    Attendance.append("⚪️")
         except:
             raise HTTPException(status_code=401, detail="Invalid or Expired cookie")
         else:
@@ -378,12 +384,24 @@ class AMIZONE:
         def timetable_command(update: Update, context: CallbackContext):
             try:
                 chat_id = update.effective_chat.id
+                message_text = update.message.text  # Get the user's message text
+
+                if len(message_text.split()) > 1:
+                    # Extract the date from the user input
+                    command, date = message_text.split(maxsplit=1)
+                    date = datetime.strptime(date, "%Y-%m-%d").strftime("%Y-%m-%d")
+                else:
+                    date = None  # If no date provided, date will be None
+
                 if check_user_exist(chat_id):
                     username, password = fetch_user_credentials(chat_id)
                     if username and password:
                         self.login(username, password)
                         self.loadCookie()
-                        timetable_data = self.timetable()
+
+                        # Pass the extracted date to the timetable function
+                        timetable_data = self.timetable(date=date)
+
                         timetable_message = ""
                         for i in range(len(timetable_data['course_code'])):
                             timetable_message += f"Course Code: {timetable_data['course_code'][i]}\n"
